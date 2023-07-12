@@ -15,77 +15,58 @@ import RoadmapItem from '@site/src/components/RoadmapItem';
         
         ```bash
         ### Packages installations
-        sudo apt update # in case of permissions error, try running with sudo
-        sudo apt install -y unzip logrotate git jq sed wget curl coreutils systemd
-        # Create the temp dir for the installation
-        temp_folder=$(mktemp -d) && cd $temp_folder
+        sudo apt -q update
+        sudo apt -qy install curl git jq lz4 build-essential
+        sudo apt -qy upgrade
         ```
         
-    - Go installation
+    - Go installation 
         
         ```bash
-        ### Configurations
-        go_package_url="https://go.dev/dl/go1.18.linux-amd64.tar.gz"
-        go_package_file_name=${go_package_url##*\/}
-        # Download GO
-        wget -q $go_package_url
-        # Unpack the GO installation file
-        sudo tar -C /usr/local -xzf $go_package_file_name
-        # Environment adjustments
-        echo "export PATH=\$PATH:/usr/local/go/bin" >>~/.profile
-        echo "export PATH=\$PATH:\$(go env GOPATH)/bin" >>~/.profile
-        source ~/.profile
+        ### Go configuration
+        sudo rm -rf /usr/local/go
+        curl -Ls https://go.dev/dl/go1.20.5.linux-amd64.tar.gz | sudo tar -xzf - -C /usr/local
+        eval $(echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/golang.sh)
+        eval $(echo 'export PATH=$PATH:$HOME/go/bin' | tee -a $HOME/.profile)
         ```
         
     - Installation verifications
         
-        
         1. You can verify the installed go version by running: `go version`
-        
-        2. The command `go env GOPATH` should include `$HOME/go`
-        If not, then, `export GOPATH=$HOME/go`
-        
-        3. PATH should include `$HOME/go/bin`
-        To verify PATH, run `echo $PATH`
-        
+        2. PATH should include `$HOME/go/bin`
+        To verify PATH, run `echo $PATH`        
 
 ## 1. Set up a local node
 
-### Download app configurations
-
-- Download setup configuration
+### Download lava binaries
     
-    Download the configuration files needed for the installation
+- Download the latest lava binaries files needed for the setup local node
     
     ```bash
-    # Download the installation setup configuration
-    git clone https://github.com/lavanet/lava-config.git
-    cd lava-config/testnet-1
-    # Read the configuration from the file
-    # Note: you can take a look at the config file and verify configurations
-    source setup_config/setup_config.sh
+    # Clone lava binaries
+    git clone https://github.com/lavanet/lava.git
+    cd lava
+    git checkout v0.16.0
     ```
-    
-- Set app configurations
-        
-    Copy lavad default config files to config Lava config folder
-    
+- Build lava binaries
     ```bash
-    echo "Lava config file path: $lava_config_folder"
-    mkdir -p $lavad_home_folder
-    mkdir -p $lava_config_folder
-    cp default_lavad_config_files/* $lava_config_folder
+    make build
     ```
+    -  lava binaries should be located at `$HOME/lava/build/lavad`
     
 
-### Set the genesis file
+### Set the genesis and addrbook file
 
-- Set the genesis file in the configuration folder
+- Download the genesis.json file to the Lava config folder
     
     ```bash
-    # Copy the genesis.json file to the Lava config folder
-    cp genesis_json/genesis.json $lava_config_folder/genesis.json
+    curl -Ls https://snapshots.kjnodes.com/lava-testnet/genesis.json > $HOME/.lava/config/genesis.json
     ```
+- Download the addrbook.json file to the Lava config folder
+    ```bash
+    curl -Ls https://snapshots.kjnodes.com/lava-testnet/addrbook.json > $HOME/.lava/config/addrbook.json
+    ```
+   
 
 ## 2. Join the Lava Testnet
 
@@ -97,113 +78,131 @@ The following sections will describe how to install Cosmovisor for automating th
 - Set up cosmovisor to ensure any future upgrades happen flawlessly. To install Cosmovisor:
     
     ```bash
-    go install github.com/cosmos/cosmos-sdk/cosmovisor/cmd/cosmovisor@v1.0.0
-    # Create the Cosmovisor folder and copy config files to it
-    mkdir -p $lavad_home_folder/cosmovisor
-    # Download the latest cosmovisor-upgrades from S3
-    wget https://lava-binary-upgrades.s3.amazonaws.com/testnet/cosmovisor-upgrades/cosmovisor-upgrades.zip
-    unzip cosmovisor-upgrades.zip
-    cp -r cosmovisor-upgrades/* $lavad_home_folder/cosmovisor
+    go install cosmossdk.io/tools/cosmovisor/cmd/cosmovisor@v1.4.0
     ```
-
+- Prepare binaries for cosmovisor
     ```bash
-    # Set the environment variables
-    echo "# Setup Cosmovisor" >> ~/.profile
-    echo "export DAEMON_NAME=lavad" >> ~/.profile
-    echo "export CHAIN_ID=lava-testnet-1" >> ~/.profile
-    echo "export DAEMON_HOME=$HOME/.lava" >> ~/.profile
-    echo "export DAEMON_ALLOW_DOWNLOAD_BINARIES=true" >> ~/.profile
-    echo "export DAEMON_LOG_BUFFER_SIZE=512" >> ~/.profile
-    echo "export DAEMON_RESTART_AFTER_UPGRADE=true" >> ~/.profile
-    echo "export UNSAFE_SKIP_BACKUP=true" >> ~/.profile
-    source ~/.profile
+    mkdir -p $HOME/.lava/cosmovisor/genesis/bin
+    mv build/lavad $HOME/.lava/cosmovisor/genesis/bin/
+    rm -rf build
     ```
-
+- Create application symlinks for cosmovisor
     ```bash
-    # Initialize the chain
-    $lavad_home_folder/cosmovisor/genesis/bin/lavad init \
-    my-node \
-    --chain-id lava-testnet-1 \
-    --home $lavad_home_folder \
-    --overwrite
-    cp genesis_json/genesis.json $lava_config_folder/genesis.json
-    ```
-
-    :::caution Please note that cosmovisor will throw an error ⚠️ This is ok.
-    The following error will be thrown,
-    lstat /home/ubuntu/.lava/cosmovisor/current/upgrade-info.json: no such file or directory
-    :::
-
-    ```bash
-    cosmovisor version
+    sudo ln -s $HOME/.lava/cosmovisor/genesis $HOME/.lava/cosmovisor/current -f
+    sudo ln -s $HOME/.lava/cosmovisor/current/bin/lavad /usr/local/bin/lavad -f
     ```
     
-    Create the systemd unit file
-    
+-  Create lava systemd unit file
     ```bash
-    # Create Cosmovisor unit file
-
-    echo "[Unit]
-    Description=Cosmovisor daemon
+    sudo tee /etc/systemd/system/lavad.service > /dev/null << EOF
+    [Unit]
+    Description=lava-testnet node service
     After=network-online.target
+
     [Service]
-    Environment="DAEMON_NAME=lavad"
-    Environment="DAEMON_HOME=${HOME}/.lava"
-    Environment="DAEMON_RESTART_AFTER_UPGRADE=true"
-    Environment="DAEMON_ALLOW_DOWNLOAD_BINARIES=true"
-    Environment="DAEMON_LOG_BUFFER_SIZE=512"
-    Environment="UNSAFE_SKIP_BACKUP=true"
     User=$USER
-    ExecStart=${HOME}/go/bin/cosmovisor start --home=$lavad_home_folder --p2p.seeds $seed_node
-    Restart=always
-    RestartSec=3
-    LimitNOFILE=infinity
-    LimitNPROC=infinity
+    ExecStart=$(which cosmovisor) run start
+    Restart=on-failure
+    RestartSec=10
+    LimitNOFILE=65535
+    Environment="DAEMON_HOME=$HOME/.lava"
+    Environment="DAEMON_NAME=lavad"
+    Environment="UNSAFE_SKIP_BACKUP=true"
+
     [Install]
     WantedBy=multi-user.target
-    " >cosmovisor.service
-    sudo mv cosmovisor.service /lib/systemd/system/cosmovisor.service
+    EOF
     ```
-
-### Download the latest Lava data snapshot (_optional_) {#snapshots}
-
-_Coming soon_
-
-### Enable and start the Cosmovisor service
-    
-- Configure the Cosmovisor service to run on boot, and start it
+- Enbale systemd service for lava
     ```bash
-    # Enable the cosmovisor service so that it will start automatically when the system boots
     sudo systemctl daemon-reload
-    sudo systemctl enable cosmovisor.service
-    sudo systemctl restart systemd-journald
-    sudo systemctl start cosmovisor
+    sudo systemctl enable lavad
     ```
+### Configure lava node {#initialize}
+   - Set node configuration
+     ```bash
+     lavad config chain-id lava-testnet-1
+     lavad config keyring-backend test
+     lavad config node tcp://localhost:26657
+     ```
+   - Initialize the node
+     ```bash
+     lavad init <your-node-name> --chain-id lava-testnet-1
+     ```
+   - Configure seed peers
+     ```bash
+     sed -i -e "s|^seeds *=.*|seeds = \"ade4d8bc8cbe014af6ebdf3cb7b1e9ad36f412c0@testnet-seeds.polkachu.com:19956,3f472746f46493309650e5a033076689996c8881@lava- 
+     testnet.rpc.kjnodes.com:14459\"|" $HOME/.lava/config/config.toml
+     ```
+   - Configure lava gas-prices
+     ```bash
+     sed -i -e "s|^minimum-gas-prices *=.*|minimum-gas-prices = \"0ulava\"|" $HOME/.lava/config/app.toml
+     ```
+   - Configure custom port for lava node (_optional_)
+     ```bash
+       PORT=210
+       sed -i -e "s%^proxy_app = \"tcp://127.0.0.1:26658\"%proxy_app = \"tcp://127.0.0.1:${PORT}58\"%; s%^laddr = \"tcp://127.0.0.1:26657\"%laddr = 
+       \"tcp://127.0.0.1:${PORT}57\"%; s%^pprof_laddr = \"localhost:6060\"%pprof_laddr = \"localhost:${PORT}60\"%; s%^laddr = \"tcp://0.0.0.0:26656\"%laddr = 
+       \"tcp://0.0.0.0:${PORT}56\"%; s%^prometheus_listen_addr = \":26660\"%prometheus_listen_addr = \":${PORT}66\"%" $HOME/.lava/config/config.toml
+       sed -i -e "s%^address = \"tcp://0.0.0.0:1317\"%address = \"tcp://0.0.0.0:${PORT}17\"%; s%^address = \":8080\"%address = \":${PORT}80\"%; s%^address = 
+       \"0.0.0.0:9090\"%address = \"0.0.0.0:${PORT}90\"%; s%^address = \"0.0.0.0:9091\"%address = \"0.0.0.0:${PORT}91\"%" $HOME/.lava/config/app.toml
+     ```
+   - Update chain-specific configuration
+     ```bash
+     sed -i \
+     -e 's/create_empty_blocks = .*/create_empty_blocks = true/g' \
+     -e 's/create_empty_blocks_interval = ".*s"/create_empty_blocks_interval = "60s"/g' \
+     -e 's/timeout_propose = ".*s"/timeout_propose = "60s"/g' \
+     -e 's/timeout_commit = ".*s"/timeout_commit = "60s"/g' \
+     -e 's/timeout_broadcast_tx_commit = ".*s"/timeout_broadcast_tx_commit = "601s"/g' \
+     $HOME/.lava/config/config.toml
+     ```
+   - Update pruning setting (_optional_)
+     ```bash
+     sed -i \
+     -e 's|^pruning *=.*|pruning = "custom"|' \
+     -e 's|^pruning-keep-recent *=.*|pruning-keep-recent = "100"|' \
+     -e 's|^pruning-keep-every *=.*|pruning-keep-every = "0"|' \
+     -e 's|^pruning-interval *=.*|pruning-interval = "19"|' \
+     $HOME/.lava/config/app.toml
+     ```
+
+
+### Download the latest Lava data snapshot (_recomended_) {#snapshots}
+```bash
+curl -L https://snap.nodexcapital.com/lava/lava-latest.tar.lz4 | tar -Ilz4 -xf - -C $HOME/.lava
+[[ -f $HOME/.lava/data/upgrade-info.json ]] && cp $HOME/.lava/data/upgrade-info.json $HOME/.lava/cosmovisor/genesis/upgrade-info.json
+```
+
+    
+
+### Start service and check the logs
+```bash
+sudo systemctl start lavad
+```
     
 
 ## 3. Verify
 
-### Verify `cosmovisor` setup
+### Verify `lava node` setup
 
 Make sure `cosmovisor` is running by checking the state of the cosmovisor service:
 
 - Check the status of the service
     ```bash
-    sudo systemctl status cosmovisor
+    sudo systemctl status lavad
     ```
 - To view the service logs - to escape, hit CTRL+C
 
     ```bash
-    sudo journalctl -u cosmovisor -f
+    sudo journalctl -fu lavad -o cat
     ```
 
 ### Verify node status
 
-Note the location of `lavad` now exists under `cosmovisor` path:
-
 ```bash
 # Check if the node is currently in the process of catching up
-$HOME/.lava/cosmovisor/current/bin/lavad status | jq .SyncInfo.catching_up
+lavad status | jq .SyncInfo
 ```
 
 ## Welcome to Lava Testnet 🌋
